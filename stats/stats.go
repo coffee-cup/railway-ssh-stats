@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	RAILWAY_API_URL = "https://backboard.railway.com/graphql/v2"
+	RAILWAY_API_DOMAIN = "backboard.railway.com/graphql/internal"
 )
 
 type PublicStats struct {
@@ -58,7 +58,7 @@ func GetPublicStats() (*PublicStats, error) {
 		log.Fatalf("Error marshaling request: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", RAILWAY_API_URL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", fmt.Sprintf("https://%s", RAILWAY_API_DOMAIN), bytes.NewBuffer(jsonData))
 	if err != nil {
 		log.Fatalf("Error creating request: %v", err)
 	}

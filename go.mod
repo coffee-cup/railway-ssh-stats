@@ -3,17 +3,18 @@ module github.com/coffee-cup/railway-stats-ssh
 go 1.24.0
 
 require (
+	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/bubbletea v1.2.4
 	github.com/charmbracelet/lipgloss v1.0.0
 	github.com/charmbracelet/log v0.4.1
 	github.com/charmbracelet/ssh v0.0.0-20250213143314-8712ec3ff3ef
 	github.com/charmbracelet/wish v1.4.6
+	github.com/gorilla/websocket v1.5.3
 )
 
 require (
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
-	github.com/charmbracelet/bubbles v0.20.0 // indirect
 	github.com/charmbracelet/keygen v0.5.1 // indirect
 	github.com/charmbracelet/x/ansi v0.8.0 // indirect
 	github.com/charmbracelet/x/conpty v0.1.0 // indirect

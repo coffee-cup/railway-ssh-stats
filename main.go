@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,9 +27,10 @@ import (
 )
 
 const (
-	host                 = "0.0.0.0"
-	port                 = "23234"
-	statsRefreshInterval = 10 * time.Second
+	host                      = "0.0.0.0"
+	port                      = "23234"
+	statsRefreshInterval      = 10 * time.Second
+	realtimeIndicatorDuration = 2 * time.Second
 )
 
 //go:embed banner.txt
@@ -82,6 +84,9 @@ type StatsMsg struct {
 	Stats *stats.PublicStats
 }
 
+// RealtimeIndicatorTickMsg is sent when the realtime indicator should be updated
+type RealtimeIndicatorTickMsg struct{}
+
 // WaitForStatsCmd waits for stats updates from the channel
 func WaitForStatsCmd(ch chan *stats.PublicStats) tea.Cmd {
 	return func() tea.Msg {
@@ -93,6 +98,13 @@ func WaitForStatsCmd(ch chan *stats.PublicStats) tea.Cmd {
 	}
 }
 
+// RealtimeIndicatorCmd sends a message after the indicator duration
+func RealtimeIndicatorCmd() tea.Cmd {
+	return tea.Tick(realtimeIndicatorDuration, func(time.Time) tea.Msg {
+		return RealtimeIndicatorTickMsg{}
+	})
+}
+
 func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	pty, _, _ := s.Pty()
 
@@ -100,6 +112,7 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	welcomeStyle := renderer.NewStyle().Foreground(lipgloss.Color("5"))
 	labelStyle := renderer.NewStyle().PaddingLeft(1)
 	valueStyle := renderer.NewStyle().Foreground(lipgloss.Color("10"))
+	realtimeStyle := renderer.NewStyle().Foreground(lipgloss.Color("9"))
 	quitStyle := renderer.NewStyle().PaddingLeft(1).Foreground(lipgloss.Color("8"))
 	titleStyle := renderer.NewStyle().Padding(1).Foreground(lipgloss.Color("5")).Bold(true)
 
@@ -117,35 +130,42 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	statsChan := broadcaster.Subscribe()
 
 	m := model{
-		width:        pty.Window.Width,
-		height:       pty.Window.Height,
-		bg:           bg,
-		welcomeStyle: welcomeStyle,
-		labelStyle:   labelStyle,
-		valueStyle:   valueStyle,
-		quitStyle:    quitStyle,
-		titleStyle:   titleStyle,
-		isWelcome:    true,
-		statsChan:    statsChan,
-		spinner:      spinner.New(),
+		width:              pty.Window.Width,
+		height:             pty.Window.Height,
+		bg:                 bg,
+		welcomeStyle:       welcomeStyle,
+		labelStyle:         labelStyle,
+		valueStyle:         valueStyle,
+		realtimeStyle:      realtimeStyle,
+		quitStyle:          quitStyle,
+		titleStyle:         titleStyle,
+		isWelcome:          true,
+		statsChan:          statsChan,
+		spinner:            spinner.New(),
+		realtimeIndicators: make(map[string]bool),
+		realtimeMutex:      &sync.Mutex{},
 	}
 	return m, options
 }
 
 // model represents the application state
 type model struct {
-	width        int
-	height       int
-	bg           string
-	welcomeStyle lipgloss.Style
-	labelStyle   lipgloss.Style
-	valueStyle   lipgloss.Style
-	quitStyle    lipgloss.Style
-	titleStyle   lipgloss.Style
-	isWelcome    bool
-	stats        *stats.PublicStats
-	statsChan    chan *stats.PublicStats
-	spinner      spinner.Model
+	width              int
+	height             int
+	bg                 string
+	welcomeStyle       lipgloss.Style
+	labelStyle         lipgloss.Style
+	valueStyle         lipgloss.Style
+	realtimeStyle      lipgloss.Style
+	quitStyle          lipgloss.Style
+	titleStyle         lipgloss.Style
+	isWelcome          bool
+	stats              *stats.PublicStats
+	prevStats          *stats.PublicStats
+	statsChan          chan *stats.PublicStats
+	spinner            spinner.Model
+	realtimeIndicators map[string]bool
+	realtimeMutex      *sync.Mutex
 }
 
 func (m model) Init() tea.Cmd {
@@ -185,11 +205,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case StatsMsg:
 		if msg.Stats != nil {
+			// Check for changes to highlight with realtime indicators
+			if m.stats != nil {
+				m.detectChanges(m.stats, msg.Stats)
+			}
+			m.prevStats = m.stats
 			m.stats = msg.Stats
 		}
-		return m, WaitForStatsCmd(m.statsChan)
+		return m, tea.Batch(
+			WaitForStatsCmd(m.statsChan),
+			RealtimeIndicatorCmd(),
+		)
+	case RealtimeIndicatorTickMsg:
+		// Clear realtime indicators after the duration
+		m.realtimeMutex.Lock()
+		m.realtimeIndicators = make(map[string]bool)
+		m.realtimeMutex.Unlock()
+		return m, nil
 	}
 	return m, nil
+}
+
+// detectChanges identifies which stats have changed and marks them for highlighting
+func (m *model) detectChanges(old, new *stats.PublicStats) {
+	m.realtimeMutex.Lock()
+	defer m.realtimeMutex.Unlock()
+
+	if old.TotalUsers != new.TotalUsers {
+		m.realtimeIndicators["totalUsers"] = true
+	}
+	if old.TotalProjects != new.TotalProjects {
+		m.realtimeIndicators["totalProjects"] = true
+	}
+	if old.TotalServices != new.TotalServices {
+		m.realtimeIndicators["totalServices"] = true
+	}
+	if old.TotalDeploymentsLastMonth != new.TotalDeploymentsLastMonth {
+		m.realtimeIndicators["totalDeploymentsLastMonth"] = true
+	}
+	if old.TotalLogsLastMonth != new.TotalLogsLastMonth {
+		m.realtimeIndicators["totalLogsLastMonth"] = true
+	}
+	if old.TotalRequestsLastMonth != new.TotalRequestsLastMonth {
+		m.realtimeIndicators["totalRequestsLastMonth"] = true
+	}
 }
 
 func (m model) View() string {
@@ -204,19 +263,31 @@ func (m model) View() string {
 	s := m.titleStyle.Render("Railway Stats") + "\n"
 
 	// Format each stat with label in default color and value in green
-	s += formatStat(m.labelStyle, m.valueStyle, "Total Users", m.stats.TotalUsers) + "\n"
-	s += formatStat(m.labelStyle, m.valueStyle, "Total Projects", m.stats.TotalProjects) + "\n"
-	s += formatStat(m.labelStyle, m.valueStyle, "Total Services", m.stats.TotalServices) + "\n"
-	s += formatStat(m.labelStyle, m.valueStyle, "Total Deployments Last Month", m.stats.TotalDeploymentsLastMonth) + "\n"
-	s += formatStat(m.labelStyle, m.valueStyle, "Total Logs Last Month", m.stats.TotalLogsLastMonth) + "\n"
-	s += formatStat(m.labelStyle, m.valueStyle, "Total Requests Last Month", m.stats.TotalRequestsLastMonth)
+	s += formatStatWithRealtime(m, "totalUsers", "Total Users", m.stats.TotalUsers) + "\n"
+	s += formatStatWithRealtime(m, "totalProjects", "Total Projects", m.stats.TotalProjects) + "\n"
+	s += formatStatWithRealtime(m, "totalServices", "Total Services", m.stats.TotalServices) + "\n"
+	s += formatStatWithRealtime(m, "totalDeploymentsLastMonth", "Total Deployments Last Month", m.stats.TotalDeploymentsLastMonth) + "\n"
+	s += formatStatWithRealtime(m, "totalLogsLastMonth", "Total Logs Last Month", m.stats.TotalLogsLastMonth) + "\n"
+	s += formatStatWithRealtime(m, "totalRequestsLastMonth", "Total Requests Last Month", m.stats.TotalRequestsLastMonth)
 
+	s += "\n\n" + m.spinner.View() + " " + m.labelStyle.Render("Updating via polling and realtime events")
 	s += "\n\n" + m.quitStyle.Render("Press 'q' to quit\n")
 
 	return s
 }
 
-// formatStat formats a stat with the label in the label style and the value in the value style
-func formatStat(labelStyle, valueStyle lipgloss.Style, label string, value int) string {
-	return labelStyle.Render(label+": ") + valueStyle.Render(fmt.Sprintf("%d", value))
+// formatStatWithRealtime formats a stat with the label in the label style and the value in the value style
+// If the stat has recently changed, it adds a realtime indicator
+func formatStatWithRealtime(m model, key, label string, value int) string {
+	m.realtimeMutex.Lock()
+	isRealtime := m.realtimeIndicators[key]
+	m.realtimeMutex.Unlock()
+
+	valueStr := fmt.Sprintf("%d", value)
+
+	if isRealtime {
+		return m.labelStyle.Render(label+": ") + m.valueStyle.Render(valueStr) + " " + m.realtimeStyle.Render("●")
+	}
+
+	return m.labelStyle.Render(label+": ") + m.valueStyle.Render(valueStr)
 }
