@@ -22,7 +22,6 @@ import (
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
-	"github.com/charmbracelet/wish/elapsed"
 	"github.com/charmbracelet/wish/logging"
 )
 
@@ -53,7 +52,6 @@ func main() {
 			bubbletea.Middleware(teaHandler),
 			activeterm.Middleware(),
 			logging.Middleware(),
-			elapsed.Middleware(),
 		),
 	)
 	if err != nil {
@@ -99,9 +97,11 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	pty, _, _ := s.Pty()
 
 	renderer := bubbletea.MakeRenderer(s)
-	txtStyle := renderer.NewStyle().Foreground(lipgloss.Color("10"))
-	quitStyle := renderer.NewStyle().Foreground(lipgloss.Color("8"))
-	titleStyle := renderer.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
+	welcomeStyle := renderer.NewStyle().Foreground(lipgloss.Color("5"))
+	labelStyle := renderer.NewStyle().PaddingLeft(1)
+	valueStyle := renderer.NewStyle().Foreground(lipgloss.Color("10"))
+	quitStyle := renderer.NewStyle().PaddingLeft(1).Foreground(lipgloss.Color("8"))
+	titleStyle := renderer.NewStyle().Padding(1).Foreground(lipgloss.Color("5")).Bold(true)
 
 	bg := "light"
 	if renderer.HasDarkBackground() {
@@ -117,31 +117,35 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	statsChan := broadcaster.Subscribe()
 
 	m := model{
-		width:      pty.Window.Width,
-		height:     pty.Window.Height,
-		bg:         bg,
-		txtStyle:   txtStyle,
-		quitStyle:  quitStyle,
-		titleStyle: titleStyle,
-		isWelcome:  true,
-		statsChan:  statsChan,
-		spinner:    spinner.New(),
+		width:        pty.Window.Width,
+		height:       pty.Window.Height,
+		bg:           bg,
+		welcomeStyle: welcomeStyle,
+		labelStyle:   labelStyle,
+		valueStyle:   valueStyle,
+		quitStyle:    quitStyle,
+		titleStyle:   titleStyle,
+		isWelcome:    true,
+		statsChan:    statsChan,
+		spinner:      spinner.New(),
 	}
 	return m, options
 }
 
 // model represents the application state
 type model struct {
-	width      int
-	height     int
-	bg         string
-	txtStyle   lipgloss.Style
-	quitStyle  lipgloss.Style
-	titleStyle lipgloss.Style
-	isWelcome  bool
-	stats      *stats.PublicStats
-	statsChan  chan *stats.PublicStats
-	spinner    spinner.Model
+	width        int
+	height       int
+	bg           string
+	welcomeStyle lipgloss.Style
+	labelStyle   lipgloss.Style
+	valueStyle   lipgloss.Style
+	quitStyle    lipgloss.Style
+	titleStyle   lipgloss.Style
+	isWelcome    bool
+	stats        *stats.PublicStats
+	statsChan    chan *stats.PublicStats
+	spinner      spinner.Model
 }
 
 func (m model) Init() tea.Cmd {
@@ -190,24 +194,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	if m.isWelcome {
-		return m.txtStyle.Render("Welcome to Railway SSH Stats\nPress any key to continue.")
+		return m.welcomeStyle.Render("Welcome to Railway SSH Stats\nPress any key to continue.")
 	}
 
 	if m.stats == nil {
-		return m.spinner.View() + " " + m.txtStyle.Render("Loading stats...")
+		return m.spinner.View() + " " + m.labelStyle.Render("Loading stats...")
 	}
 
-	s := m.titleStyle.Render("Railway Public Stats") + "\n\n"
+	s := m.titleStyle.Render("Railway Stats") + "\n"
 
-	s += m.txtStyle.Render(fmt.Sprintf("Total Users: %d\n", m.stats.TotalUsers))
-	s += m.txtStyle.Render(fmt.Sprintf("Total Projects: %d\n", m.stats.TotalProjects))
-	s += m.txtStyle.Render(fmt.Sprintf("Total Services: %d\n", m.stats.TotalServices))
-	s += m.txtStyle.Render(fmt.Sprintf("Total Deployments Last Month: %d\n", m.stats.TotalDeploymentsLastMonth))
-	s += m.txtStyle.Render(fmt.Sprintf("Total Logs Last Month: %d\n", m.stats.TotalLogsLastMonth))
-	s += m.txtStyle.Render(fmt.Sprintf("Total Requests Last Month: %d\n", m.stats.TotalRequestsLastMonth))
+	// Format each stat with label in default color and value in green
+	s += formatStat(m.labelStyle, m.valueStyle, "Total Users", m.stats.TotalUsers) + "\n"
+	s += formatStat(m.labelStyle, m.valueStyle, "Total Projects", m.stats.TotalProjects) + "\n"
+	s += formatStat(m.labelStyle, m.valueStyle, "Total Services", m.stats.TotalServices) + "\n"
+	s += formatStat(m.labelStyle, m.valueStyle, "Total Deployments Last Month", m.stats.TotalDeploymentsLastMonth) + "\n"
+	s += formatStat(m.labelStyle, m.valueStyle, "Total Logs Last Month", m.stats.TotalLogsLastMonth) + "\n"
+	s += formatStat(m.labelStyle, m.valueStyle, "Total Requests Last Month", m.stats.TotalRequestsLastMonth)
 
-	s += "\n" + m.spinner.View() + " " + m.txtStyle.Render("Updating every 10s")
 	s += "\n\n" + m.quitStyle.Render("Press 'q' to quit\n")
 
 	return s
+}
+
+// formatStat formats a stat with the label in the label style and the value in the value style
+func formatStat(labelStyle, valueStyle lipgloss.Style, label string, value int) string {
+	return labelStyle.Render(label+": ") + valueStyle.Render(fmt.Sprintf("%d", value))
 }
