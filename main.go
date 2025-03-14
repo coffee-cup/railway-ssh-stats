@@ -94,7 +94,6 @@ func WaitForStatsCmd(ch chan *stats.PublicStats) tea.Cmd {
 		if !ok {
 			return nil // Channel closed
 		}
-		fmt.Printf("Stats: %+v\n", stats)
 		statsCopy := *stats
 		return StatsMsg{Stats: &statsCopy}
 	}
