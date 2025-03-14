@@ -127,7 +127,6 @@ func (sb *StatsBroadcaster) fetchAndBroadcast() {
 		log.Error("Could not get stats", "error", err)
 		return
 	}
-	// log.Info("Stats updated via polling", "stats", newStats)
 	sb.Broadcast(newStats)
 }
 

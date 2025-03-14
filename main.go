@@ -30,7 +30,7 @@ const (
 	host                      = "0.0.0.0"
 	port                      = "23234"
 	statsRefreshInterval      = 10 * time.Second
-	realtimeIndicatorDuration = 2 * time.Second
+	realtimeIndicatorDuration = 1 * time.Second
 )
 
 //go:embed banner.txt
@@ -48,7 +48,7 @@ func main() {
 		wish.WithAddress(net.JoinHostPort(host, port)),
 		wish.WithHostKeyPath(".ssh/id_ed25519"),
 		wish.WithBannerHandler(func(ctx ssh.Context) string {
-			return fmt.Sprintf(banner+"\n\n", ctx.User())
+			return fmt.Sprintf(banner+"\n", ctx.User())
 		}),
 		wish.WithMiddleware(
 			bubbletea.Middleware(teaHandler),
@@ -94,7 +94,9 @@ func WaitForStatsCmd(ch chan *stats.PublicStats) tea.Cmd {
 		if !ok {
 			return nil // Channel closed
 		}
-		return StatsMsg{Stats: stats}
+		fmt.Printf("Stats: %+v\n", stats)
+		statsCopy := *stats
+		return StatsMsg{Stats: &statsCopy}
 	}
 }
 
@@ -122,8 +124,7 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	}
 
 	options := []tea.ProgramOption{
-		tea.WithMouseCellMotion(),
-		tea.WithMouseAllMotion(),
+		tea.WithAltScreen(),
 	}
 
 	// Subscribe to stats updates
@@ -139,7 +140,7 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		realtimeStyle:      realtimeStyle,
 		quitStyle:          quitStyle,
 		titleStyle:         titleStyle,
-		isWelcome:          true,
+		isWelcome:          false,
 		statsChan:          statsChan,
 		spinner:            spinner.New(),
 		realtimeIndicators: make(map[string]bool),
@@ -249,6 +250,9 @@ func (m *model) detectChanges(old, new *stats.PublicStats) {
 	if old.TotalRequestsLastMonth != new.TotalRequestsLastMonth {
 		m.realtimeIndicators["totalRequestsLastMonth"] = true
 	}
+
+	fmt.Printf("Comparing %+v with %+v\n", old.TotalDeploymentsLastMonth, new.TotalDeploymentsLastMonth)
+	log.Info("Changes detected", "realtimeIndicators", m.realtimeIndicators)
 }
 
 func (m model) View() string {
