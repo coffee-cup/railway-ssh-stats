@@ -1,0 +1,19 @@
+[tasks.build]
+run = "go build -o bin/cli main.go"
+
+[tasks.run]
+run = "go run main.go"
+
+[tasks.check]
+run = """
+go vet ./...
+go fmt ./...
+golangci-lint run
+"""
+
+[tasks.tidy]
+run = "go mod tidy"
+
+[tools]
+go = "1.24"
+golangci-lint = "1.64"

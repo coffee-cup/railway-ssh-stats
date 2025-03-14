@@ -12,6 +12,9 @@ import (
 
 	_ "embed"
 
+	"github.com/coffee-cup/railway-stats-ssh/stats"
+
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
@@ -24,38 +27,32 @@ import (
 )
 
 const (
-	host = "0.0.0.0"
-	port = "23234"
+	host                 = "0.0.0.0"
+	port                 = "23234"
+	statsRefreshInterval = 10 * time.Second
 )
 
 //go:embed banner.txt
 var banner string
 
+// Global broadcaster instance
+var broadcaster *stats.StatsBroadcaster
+
 func main() {
+	// Initialize the broadcaster with refresh interval
+	broadcaster = stats.NewStatsBroadcaster(statsRefreshInterval)
+	defer broadcaster.Shutdown()
+
 	s, err := wish.NewServer(
 		wish.WithAddress(net.JoinHostPort(host, port)),
 		wish.WithHostKeyPath(".ssh/id_ed25519"),
-		// A banner is always shown, even before authentication.
 		wish.WithBannerHandler(func(ctx ssh.Context) string {
-			return fmt.Sprintf(banner, ctx.User())
-		}),
-		wish.WithPasswordAuth(func(ctx ssh.Context, password string) bool {
-			return password == "asd123"
+			return fmt.Sprintf(banner+"\n\n", ctx.User())
 		}),
 		wish.WithMiddleware(
 			bubbletea.Middleware(teaHandler),
-			activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
-
-			func(next ssh.Handler) ssh.Handler {
-				return func(sess ssh.Session) {
-					wish.Println(sess, fmt.Sprintf("Hello, %s!", sess.User()))
-					next(sess)
-				}
-			},
-
+			activeterm.Middleware(),
 			logging.Middleware(),
-
-			// This middleware prints the session duration before disconnecting.
 			elapsed.Middleware(),
 		),
 	)
@@ -75,67 +72,99 @@ func main() {
 
 	<-done
 	log.Info("Stopping SSH server")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer func() { cancel() }()
-	if err := s.Shutdown(ctx); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+	if err := s.Shutdown(shutdownCtx); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
 		log.Error("Could not stop server", "error", err)
 	}
 }
 
-// You can wire any Bubble Tea model up to the middleware with a function that
-// handles the incoming ssh.Session. Here we just grab the terminal info and
-// pass it to the new model. You can also return tea.ProgramOptions (such as
-// tea.WithAltScreen) on a session by session basis.
+// StatsMsg is a message containing the latest stats
+type StatsMsg struct {
+	Stats *stats.PublicStats
+}
+
+// WaitForStatsCmd waits for stats updates from the channel
+func WaitForStatsCmd(ch chan *stats.PublicStats) tea.Cmd {
+	return func() tea.Msg {
+		stats, ok := <-ch
+		if !ok {
+			return nil // Channel closed
+		}
+		return StatsMsg{Stats: stats}
+	}
+}
+
 func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
-	// This should never fail, as we are using the activeterm middleware.
 	pty, _, _ := s.Pty()
 
-	// When running a Bubble Tea app over SSH, you shouldn't use the default
-	// lipgloss.NewStyle function.
-	// That function will use the color profile from the os.Stdin, which is the
-	// server, not the client.
-	// We provide a MakeRenderer function in the bubbletea middleware package,
-	// so you can easily get the correct renderer for the current session, and
-	// use it to create the styles.
-	// The recommended way to use these styles is to then pass them down to
-	// your Bubble Tea model.
 	renderer := bubbletea.MakeRenderer(s)
 	txtStyle := renderer.NewStyle().Foreground(lipgloss.Color("10"))
 	quitStyle := renderer.NewStyle().Foreground(lipgloss.Color("8"))
+	titleStyle := renderer.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
 
 	bg := "light"
 	if renderer.HasDarkBackground() {
 		bg = "dark"
 	}
 
-	m := model{
-		term:      pty.Term,
-		profile:   renderer.ColorProfile().Name(),
-		width:     pty.Window.Width,
-		height:    pty.Window.Height,
-		bg:        bg,
-		txtStyle:  txtStyle,
-		quitStyle: quitStyle,
+	options := []tea.ProgramOption{
+		tea.WithMouseCellMotion(),
+		tea.WithMouseAllMotion(),
 	}
-	return m, []tea.ProgramOption{tea.WithAltScreen()}
+
+	// Subscribe to stats updates
+	statsChan := broadcaster.Subscribe()
+
+	m := model{
+		width:      pty.Window.Width,
+		height:     pty.Window.Height,
+		bg:         bg,
+		txtStyle:   txtStyle,
+		quitStyle:  quitStyle,
+		titleStyle: titleStyle,
+		isWelcome:  true,
+		statsChan:  statsChan,
+		spinner:    spinner.New(),
+	}
+	return m, options
 }
 
-// Just a generic tea.Model to demo terminal information of ssh.
+// model represents the application state
 type model struct {
-	term      string
-	profile   string
-	width     int
-	height    int
-	bg        string
-	txtStyle  lipgloss.Style
-	quitStyle lipgloss.Style
+	width      int
+	height     int
+	bg         string
+	txtStyle   lipgloss.Style
+	quitStyle  lipgloss.Style
+	titleStyle lipgloss.Style
+	isWelcome  bool
+	stats      *stats.PublicStats
+	statsChan  chan *stats.PublicStats
+	spinner    spinner.Model
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return tea.Batch(
+		m.spinner.Tick,
+		WaitForStatsCmd(m.statsChan),
+	)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.isWelcome {
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			key := msg.String()
+			if key == "q" || key == "ctrl+c" {
+				broadcaster.Unsubscribe(m.statsChan)
+				return m, tea.Quit
+			} else {
+				m.isWelcome = false
+				return m, tea.EnterAltScreen
+			}
+		}
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.height = msg.Height
@@ -143,13 +172,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
+			broadcaster.Unsubscribe(m.statsChan)
 			return m, tea.Quit
 		}
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	case StatsMsg:
+		if msg.Stats != nil {
+			m.stats = msg.Stats
+		}
+		return m, WaitForStatsCmd(m.statsChan)
 	}
 	return m, nil
 }
 
 func (m model) View() string {
-	s := fmt.Sprintf("Your term is %s\nYour window size is %dx%d\nBackground: %s\nColor Profile: %s", m.term, m.width, m.height, m.bg, m.profile)
-	return m.txtStyle.Render(s) + "\n\n" + m.quitStyle.Render("Press 'q' to quit\n")
+	if m.isWelcome {
+		return m.txtStyle.Render("Welcome to Railway SSH Stats\nPress any key to continue.")
+	}
+
+	if m.stats == nil {
+		return m.spinner.View() + " " + m.txtStyle.Render("Loading stats...")
+	}
+
+	s := m.titleStyle.Render("Railway Public Stats") + "\n\n"
+
+	s += m.txtStyle.Render(fmt.Sprintf("Total Users: %d\n", m.stats.TotalUsers))
+	s += m.txtStyle.Render(fmt.Sprintf("Total Projects: %d\n", m.stats.TotalProjects))
+	s += m.txtStyle.Render(fmt.Sprintf("Total Services: %d\n", m.stats.TotalServices))
+	s += m.txtStyle.Render(fmt.Sprintf("Total Deployments Last Month: %d\n", m.stats.TotalDeploymentsLastMonth))
+	s += m.txtStyle.Render(fmt.Sprintf("Total Logs Last Month: %d\n", m.stats.TotalLogsLastMonth))
+	s += m.txtStyle.Render(fmt.Sprintf("Total Requests Last Month: %d\n", m.stats.TotalRequestsLastMonth))
+
+	s += "\n" + m.spinner.View() + " " + m.txtStyle.Render("Updating every 10s")
+	s += "\n\n" + m.quitStyle.Render("Press 'q' to quit\n")
+
+	return s
 }
