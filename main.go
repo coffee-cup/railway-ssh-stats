@@ -127,7 +127,6 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		tea.WithAltScreen(),
 	}
 
-	// Subscribe to stats updates
 	statsChan := broadcaster.Subscribe()
 
 	m := model{
@@ -149,7 +148,6 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	return m, options
 }
 
-// model represents the application state
 type model struct {
 	width              int
 	height             int
@@ -206,7 +204,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case StatsMsg:
 		if msg.Stats != nil {
-			// Check for changes to highlight with realtime indicators
 			if m.stats != nil {
 				m.detectChanges(m.stats, msg.Stats)
 			}
@@ -218,7 +215,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			RealtimeIndicatorCmd(),
 		)
 	case RealtimeIndicatorTickMsg:
-		// Clear realtime indicators after the duration
 		m.realtimeMutex.Lock()
 		m.realtimeIndicators = make(map[string]bool)
 		m.realtimeMutex.Unlock()

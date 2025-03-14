@@ -48,7 +48,6 @@ func (sb *StatsBroadcaster) Subscribe() chan *PublicStats {
 
 	ch := make(chan *PublicStats, 1)
 
-	// If this is the first subscriber, start fetching and websocket
 	firstSubscriber := len(sb.subscribers) == 0
 	sb.subscribers[ch] = true
 
@@ -58,13 +57,10 @@ func (sb *StatsBroadcaster) Subscribe() chan *PublicStats {
 		go sb.startWebSocketSubscription()
 	}
 
-	// Send the latest stats immediately if available
 	sb.statsMutex.RLock()
 	if sb.latestStats != nil {
 		ch <- sb.latestStats
 	} else if firstSubscriber {
-		// If this is the first subscriber and we don't have stats yet,
-		// fetch them immediately
 		sb.statsMutex.RUnlock()
 		go sb.fetchAndBroadcast()
 		return ch
@@ -82,7 +78,6 @@ func (sb *StatsBroadcaster) Unsubscribe(ch chan *PublicStats) {
 	delete(sb.subscribers, ch)
 	close(ch)
 
-	// If no more subscribers, stop fetching and websocket
 	if len(sb.subscribers) == 0 {
 		log.Info("No more subscribers, stopping stats fetching and websocket")
 		sb.stopFetching()
@@ -105,11 +100,9 @@ func (sb *StatsBroadcaster) Broadcast(stats *PublicStats) {
 	}
 
 	for ch := range sb.subscribers {
-		// Non-blocking send to prevent slow subscribers from blocking the broadcast
 		select {
 		case ch <- stats:
 		default:
-			// Channel buffer is full, replace the old value with the new one
 			select {
 			case <-ch:
 				ch <- stats
@@ -142,7 +135,6 @@ func (sb *StatsBroadcaster) startFetching() {
 	sb.fetchingActive = true
 	sb.fetchTicker = time.NewTicker(sb.interval)
 
-	// Start the fetching goroutine
 	go func() {
 		defer func() {
 			sb.fetchingMutex.Lock()
@@ -151,7 +143,6 @@ func (sb *StatsBroadcaster) startFetching() {
 			close(sb.fetchDone)
 		}()
 
-		// Fetch initial stats
 		sb.fetchAndBroadcast()
 
 		for {
@@ -260,7 +251,7 @@ func (sb *StatsBroadcaster) startWebSocketSubscription() {
 
 	initMsg := GraphQLWSMessage{
 		Type:    "connection_init",
-		Payload: json.RawMessage(`{}`), // Add empty payload object
+		Payload: json.RawMessage(`{}`),
 	}
 	log.Info("Sending connection init message", "message", initMsg)
 	if err := conn.WriteJSON(initMsg); err != nil {
