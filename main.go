@@ -250,9 +250,6 @@ func (m *model) detectChanges(old, new *stats.PublicStats) {
 	if old.TotalRequestsLastMonth != new.TotalRequestsLastMonth {
 		m.realtimeIndicators["totalRequestsLastMonth"] = true
 	}
-
-	fmt.Printf("Comparing %+v with %+v\n", old.TotalDeploymentsLastMonth, new.TotalDeploymentsLastMonth)
-	log.Info("Changes detected", "realtimeIndicators", m.realtimeIndicators)
 }
 
 func (m model) View() string {
