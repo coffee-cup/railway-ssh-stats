@@ -262,7 +262,6 @@ func (m model) View() string {
 
 	s := m.titleStyle.Render("Railway Stats") + "\n"
 
-	// Format each stat with label in default color and value in green
 	s += formatStatWithRealtime(m, "totalUsers", "Total Users", m.stats.TotalUsers) + "\n"
 	s += formatStatWithRealtime(m, "totalProjects", "Total Projects", m.stats.TotalProjects) + "\n"
 	s += formatStatWithRealtime(m, "totalServices", "Total Services", m.stats.TotalServices) + "\n"
@@ -270,7 +269,6 @@ func (m model) View() string {
 	s += formatStatWithRealtime(m, "totalLogsLastMonth", "Total Logs Last Month", m.stats.TotalLogsLastMonth) + "\n"
 	s += formatStatWithRealtime(m, "totalRequestsLastMonth", "Total Requests Last Month", m.stats.TotalRequestsLastMonth)
 
-	s += "\n\n" + m.spinner.View() + " " + m.labelStyle.Render("Updating via polling and realtime events")
 	s += "\n\n" + m.quitStyle.Render("Press 'q' to quit\n")
 
 	return s
